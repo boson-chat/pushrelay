@@ -102,12 +102,18 @@ func Build(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 	}
 	m := metrics.New()
 
-	// 2. Upstreams: Google service account, APNs, FCM.
+	// 2. Upstreams: Google credentials (service account key or Workload
+	// Identity Federation), APNs, FCM.
+	gopts := googleauth.Options{
+		SubjectTokenHeaderFile: cfg.FCM.WorkloadToken(), SubjectTokenHeader: cfg.FCM.WorkloadTokenHeader, HTTPClient: base,
+	}
 	google := opts.Google
 	if google == nil && cfg.FCM.Enabled() {
-		if google, err = googleauth.Load(ctx, cfg.FCM.CredentialsFile); err != nil {
+		if google, err = googleauth.Load(ctx, cfg.FCM.CredentialsFile, gopts); err != nil {
 			return fail(err)
 		}
+		logger.FromCtx(ctx).Info().Str("kind", google.Kind).Str("service_account", google.ClientEmail).
+			Bool("workload_token_header", gopts.SubjectTokenHeaderFile != "").Msg("google credentials loaded")
 	}
 	senders := delivery.Router{APNs: opts.APNs, FCM: opts.FCM}
 	if senders.APNs == nil && cfg.APNs.Enabled() {
@@ -127,7 +133,7 @@ func Build(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 			project = google.ProjectID
 		}
 		if project == "" {
-			return fail(errors.New("PUSHRELAY_FCM_PROJECT_ID is empty and the credentials file has no project_id"))
+			return fail(errors.New("PUSHRELAY_FCM_PROJECT_ID is empty and the credentials file has no project_id (an external_account file never has one)"))
 		}
 		senders.FCM = &delivery.FCM{ProjectID: project, Endpoint: cfg.FCM.Endpoint, Client: google.Client(base)}
 	}
@@ -146,7 +152,7 @@ func Build(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 	}
 	playGoogle := opts.PlayGoogle
 	if playGoogle == nil && cfg.Attest.PlayCredentialsFile != "" {
-		if playGoogle, err = googleauth.Load(ctx, cfg.Attest.PlayCredentialsFile); err != nil {
+		if playGoogle, err = googleauth.Load(ctx, cfg.Attest.PlayCredentialsFile, gopts); err != nil {
 			return fail(err)
 		}
 	}

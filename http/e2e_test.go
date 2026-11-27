@@ -290,7 +290,39 @@ func TestEndToEndAPNs(t *testing.T) {
 }
 
 func TestEndToEndFCMWithPlayIntegrity(t *testing.T) {
-	r := newRelay(t, nil)
+	fcmFlow(t, newRelay(t, nil))
+}
+
+// FCM and Play Integrity with an external_account credential file (Google
+// Workload Identity Federation, no service-account key): the relay gets a
+// subject token from the auth service's workload endpoint (secret from
+// PUSHRELAY_WORKLOAD_TOKEN_FILE), trades it at STS, impersonates the
+// service account, and the project comes from PUSHRELAY_FCM_PROJECT_ID.
+func TestEndToEndFCMWithWorkloadIdentity(t *testing.T) {
+	wif := googleauthtest.NewWIF(t)
+	dir := t.TempDir()
+	creds := filepath.Join(dir, "fcm-wif.json")
+	require.NoError(t, os.WriteFile(creds, wif.CredConfig(t, false), 0o600))
+	secret := filepath.Join(dir, "workload-token")
+	require.NoError(t, os.WriteFile(secret, []byte(googleauthtest.WIFSecret), 0o600))
+	r := newRelay(t, map[string]string{
+		"PUSHRELAY_FCM_CREDENTIALS_FILE": creds,
+		"PUSHRELAY_FCM_PROJECT_ID":       "boson-test",
+		"PUSHRELAY_WORKLOAD_TOKEN_FILE":  secret,
+	})
+	fcmFlow(t, r)
+	assert.Equal(t, int32(1), wif.STSRequests.Load(), "one token for FCM and Play Integrity")
+	assert.Equal(t, int32(1), wif.IAMRequests.Load())
+
+	// Without PUSHRELAY_FCM_PROJECT_ID there is no project to send to.
+	t.Setenv("PUSHRELAY_FCM_PROJECT_ID", "")
+	c, err := config.Load()
+	require.NoError(t, err)
+	_, err = relayhttp.Build(context.Background(), c, relayhttp.Options{})
+	require.ErrorContains(t, err, "PUSHRELAY_FCM_PROJECT_ID")
+}
+
+func fcmFlow(t *testing.T, r *relay) {
 	in, d := newInstall(t), newDevice(t)
 
 	_, ch := r.do(r.public, "GET", "/v1/challenge", nil, nil)
