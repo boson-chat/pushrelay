@@ -108,3 +108,18 @@ func TestValidate(t *testing.T) {
 	}
 	assert.Equal(t, "::bad", HTTPConfig{PublicURL: "::bad"}.Origin())
 }
+
+func TestWorkloadTokenFileOnlyWhenPresent(t *testing.T) {
+	c := FCMConfig{WorkloadTokenFile: filepath.Join(t.TempDir(), "absent")}
+	assert.Equal(t, "", c.WorkloadToken(), "the stack's default path without a file")
+	path := filepath.Join(t.TempDir(), "workload-token")
+	require.NoError(t, os.WriteFile(path, []byte("s"), 0o600))
+	c.WorkloadTokenFile = path
+	assert.Equal(t, path, c.WorkloadToken())
+	assert.Equal(t, "", FCMConfig{}.WorkloadToken())
+
+	t.Setenv("DATABASE_URL", "memory")
+	cfg, err := Load()
+	require.NoError(t, err)
+	assert.Equal(t, "X-Workload-Token", cfg.FCM.WorkloadTokenHeader)
+}

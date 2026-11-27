@@ -218,13 +218,15 @@ Env vars (names agreed with the stack's `pushrelay` profile):
 | `PUSHRELAY_APNS_KEY_ID`, `PUSHRELAY_APNS_TEAM_ID` | – | key id, Apple team id |
 | `PUSHRELAY_APNS_TOPIC` | `chat.boson.app` | bundle id (`apns-topic`, iOS `app`) |
 | `PUSHRELAY_APNS_FALLBACK_BODY` | `New message` | alert shown if the extension can't run |
-| `PUSHRELAY_FCM_CREDENTIALS_FILE` | – | Firebase service account JSON; a missing file disables FCM |
-| `PUSHRELAY_FCM_PROJECT_ID` | from the file | |
+| `PUSHRELAY_FCM_CREDENTIALS_FILE` | – | Google credentials for FCM: a service-account key **or** an `external_account` credential configuration ([FCM without a service-account key](#fcm-without-a-service-account-key)); a missing file disables FCM |
+| `PUSHRELAY_FCM_PROJECT_ID` | from the file | Firebase project id; **required** with an `external_account` file (it names none) |
+| `PUSHRELAY_WORKLOAD_TOKEN_FILE` | – | secret sent as `PUSHRELAY_WORKLOAD_TOKEN_HEADER` to an `external_account` file's url `credential_source` (FCM and Play Integrity files); used when set and present |
+| `PUSHRELAY_WORKLOAD_TOKEN_HEADER` | `X-Workload-Token` | that header's name (the auth service's workload endpoint) |
 | `PUSHRELAY_APP_ATTEST_APP_ID` | `TEAM_ID.TOPIC` | App Attest app id; empty (no team id) = App Attest off |
 | `PUSHRELAY_APP_ATTEST_ENV` | `production` | `development` also accepts dev-signed keys (apns-sandbox only) |
 | `PUSHRELAY_PLAY_INTEGRITY_PACKAGE` | `chat.boson.app` | Android package (`app` for fcm) |
 | `PUSHRELAY_PLAY_INTEGRITY_CERT_SHA256` | – | allowed signing cert digests, comma-separated (hex, `AA:BB:..` or base64url) |
-| `PUSHRELAY_PLAY_INTEGRITY_CREDENTIALS_FILE` | the FCM one | service account for `decodeIntegrityToken` |
+| `PUSHRELAY_PLAY_INTEGRITY_CREDENTIALS_FILE` | the FCM one | credentials (either kind) for `decodeIntegrityToken` |
 | `PUSHRELAY_DEV_ALLOWLIST_FILE` | – | development allowlist (see Attestation) |
 | `PUSHRELAY_DEV_ALLOWLIST_PLATFORMS` | `apns-sandbox` | where the allowlist applies |
 | `PUSHRELAY_MAILBOX_*`, `PUSHRELAY_INSTALL_PER_HOUR`, `PUSHRELAY_CREATE_PER_IP_PER_HOUR`, `PUSHRELAY_MAILBOXES_PER_INSTALL` | see Limits | |
@@ -241,14 +243,58 @@ Test-only overrides: `PUSHRELAY_APNS_ENDPOINT`, `PUSHRELAY_APNS_SANDBOX_ENDPOINT
 ## What the operator provides
 - **APNs:** an APNs Auth Key (`.p8`) with its Key ID, the Apple Team ID, and the bundle id
   (`chat.boson.app`). One key serves production and sandbox.
-- **Firebase:** a Firebase project with the Android app, and a service account key (JSON) with
-  the *Firebase Cloud Messaging API Admin* role.
+- **Firebase:** a Firebase project with the Android app, and a service account with the
+  *Firebase Cloud Messaging API Admin* role: either its key (JSON), or, keyless, a Workload
+  Identity Federation credential configuration (below).
 - **Play Integrity:** link the Google Cloud project in Play Console → App integrity, enable the
   Play Integrity API, and give the service account (the FCM one or
   `PUSHRELAY_PLAY_INTEGRITY_CREDENTIALS_FILE`) access to decode tokens; set
   `PUSHRELAY_PLAY_INTEGRITY_CERT_SHA256` to the app signing key's SHA-256 (Play Console).
 - **App Attest:** enable the App Attest capability for the app id; nothing to configure on the
   relay beyond the team id / app id.
+
+## FCM without a service-account key
+Where keys are forbidden (org policy `iam.disableServiceAccountKeyCreation`), the relay uses
+**Google Workload Identity Federation**. `PUSHRELAY_FCM_CREDENTIALS_FILE` is then an
+`external_account` credential configuration, loaded with `golang.org/x/oauth2/google`'s
+generic credentials path (`CredentialsFromJSONWithTypeAndParams`, the same path as a key file):
+
+1. The relay GETs its `credential_source.url` for a short-lived OIDC token. In the Boson
+   stack that is the auth service's workload issuer,
+   `http://auth:8081/internal/v1/workload/token` (boson-chat/auth
+   `docs/workload-identity.md`): an ES256 JWT with `iss` `https://AUTH_HOST/workload`,
+   `sub` `service:pushrelay`, `aud` `boson-pushrelay`.
+2. Google STS checks it against the pool's OIDC provider (which fetches
+   `https://AUTH_HOST/workload/.well-known/openid-configuration` and its JWKS) and returns a
+   federated token.
+3. With `service_account_impersonation_url`, IAM Credentials turns that into an access token
+   for the service account (`roles/iam.workloadIdentityUser` granted to the pool subject);
+   FCM and Play Integrity are called with it. Tokens are cached until they expire.
+
+The credential configuration names the pool, provider, service account and token url; it
+holds **no secret**. The url wants a secret header (`X-Workload-Token`), which the relay adds
+from `PUSHRELAY_WORKLOAD_TOKEN_FILE`, so only that file is secret. Make it with:
+
+```sh
+gcloud iam workload-identity-pools create-cred-config \
+  projects/PROJECT_NUMBER/locations/global/workloadIdentityPools/POOL/providers/PROVIDER \
+  --service-account=SA_EMAIL \
+  --credential-source-url='http://auth:8081/internal/v1/workload/token?audience=AUDIENCE' \
+  --credential-source-type=json --credential-source-field-name=id_token \
+  --output-file=fcm.json
+```
+
+and run the relay with
+
+```sh
+PUSHRELAY_FCM_CREDENTIALS_FILE=/run/secrets/pushrelay/fcm.json   # the external_account file
+PUSHRELAY_FCM_PROJECT_ID=<firebase project id>                   # the file has none
+PUSHRELAY_WORKLOAD_TOKEN_FILE=/run/secrets/pushrelay/workload-token  # auth's WORKLOAD_TOKEN_PUSHRELAY
+```
+
+Only `url` and `file` credential sources are accepted (no executables, no cloud metadata),
+and `audience` must be a `//iam.googleapis.com/` pool provider. The Boson stack's
+`docs/push.md` ("Running the relay") has boson.chat's pool, provider and the generated file.
 
 ## Storage
 Postgres (`db/migrations`): `mailboxes`, plus `blocked_installs`, `challenges` (single-use,

@@ -195,7 +195,7 @@ func TestLoadAPNsKey(t *testing.T) {
 
 func newFCM(t *testing.T) (*delivery.FCM, *deliverytest.Fake) {
 	ts := googleauthtest.New(t)
-	creds, err := googleauth.Parse(context.Background(), ts.KeyFile(t, "boson-test"))
+	creds, err := googleauth.Parse(context.Background(), ts.KeyFile(t, "boson-test"), googleauth.Options{})
 	require.NoError(t, err)
 	f := deliverytest.NewFCM(t)
 	return &delivery.FCM{ProjectID: creds.ProjectID, Endpoint: f.URL, Client: creds.Client(f.Client())}, f

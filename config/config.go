@@ -85,12 +85,33 @@ type APNsConfig struct {
 // passes a default path whether or not the file is there).
 func (c APNsConfig) Enabled() bool { return fileExists(c.KeyFile) }
 
-// FCMConfig is the Firebase project's service account.
+// FCMConfig is the Firebase project's Google credentials.
 type FCMConfig struct {
+	// A service_account key file, or an external_account (Workload
+	// Identity Federation) credential configuration: README "FCM without a
+	// service-account key".
 	CredentialsFile string `env:"PUSHRELAY_FCM_CREDENTIALS_FILE"`
-	// Defaults to project_id from the credentials file.
+	// Defaults to project_id from the credentials file. Required with an
+	// external_account file (it has none).
 	ProjectID string `env:"PUSHRELAY_FCM_PROJECT_ID"`
 	Endpoint  string `default:"https://fcm.googleapis.com" env:"PUSHRELAY_FCM_ENDPOINT"`
+	// For external_account files with a url credential_source (FCM and
+	// Play Integrity): a secret file whose content is sent as
+	// WorkloadTokenHeader when fetching the subject token, so the
+	// credential configuration holds no secret. Used when set and the file
+	// exists (the stack passes a default path).
+	WorkloadTokenFile string `env:"PUSHRELAY_WORKLOAD_TOKEN_FILE"`
+	// Header name for WorkloadTokenFile (the auth service's workload
+	// token endpoint reads X-Workload-Token).
+	WorkloadTokenHeader string `default:"X-Workload-Token" env:"PUSHRELAY_WORKLOAD_TOKEN_HEADER"`
+}
+
+// WorkloadToken returns WorkloadTokenFile when it is set and exists, else "".
+func (c FCMConfig) WorkloadToken() string {
+	if fileExists(c.WorkloadTokenFile) {
+		return c.WorkloadTokenFile
+	}
+	return ""
 }
 
 // Enabled reports whether the credentials file is set and exists.
