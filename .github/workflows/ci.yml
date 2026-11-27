@@ -1,0 +1,58 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: pushrelay
+          POSTGRES_PASSWORD: pushrelay-ci
+          POSTGRES_DB: pushrelay
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U pushrelay"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 30
+    env:
+      # The Postgres store tests create a throwaway database per test from this one.
+      TEST_DATABASE_URL: postgres://pushrelay:pushrelay-ci@localhost:5432/pushrelay?sslmode=disable
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: gofmt
+        run: test -z "$(gofmt -l $(git ls-files '*.go'))" || (gofmt -l $(git ls-files '*.go') && exit 1)
+      - run: go vet ./...
+      - run: go test -race -count=1 -coverpkg=./... -coverprofile=coverage.out ./...
+      - name: coverage
+        run: go tool cover -func=coverage.out | tail -1
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: golangci/golangci-lint-action@v8
+        with:
+          version: v2.15.0
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build --build-arg VERSION=ci -t pushrelay:ci .

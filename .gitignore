@@ -1,0 +1,22 @@
+# Binaries
+/bin/
+*.exe
+*.test
+*.out
+coverage.*
+
+# Go workspace
+go.work
+go.work.sum
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+*.p8
+*credentials*.json
