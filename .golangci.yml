@@ -1,0 +1,13 @@
+version: "2"
+linters:
+  settings:
+    errcheck:
+      exclude-functions:
+        - (io.Closer).Close
+        - (net/http.ResponseWriter).Write
+        - fmt.Fprintln
+        - fmt.Fprintf
+  exclusions:
+    rules:
+      - path: _test\.go
+        linters: [errcheck]
